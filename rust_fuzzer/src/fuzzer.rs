@@ -17,6 +17,8 @@ use crate::structured_fuzzer::mutator::{Mutator, MutatorSnapshotState};
 use crate::structured_fuzzer::random::distributions::Distributions;
 use crate::structured_fuzzer::GraphStorage;
 
+use crate::bandit::{BanditScheduler, BanditUpdateStats};
+
 use libnyx::NyxConfig;
 
 
@@ -123,6 +125,7 @@ pub struct StructFuzzer<Fuzz: FuzzRunner + GetStructStorage> {
     stats: FuzzStats,
     //mutation_log: File,
     snapshot_cutoffs: HashMap<InputID, usize>,
+    bandit: BanditScheduler,
 }
 
 impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
@@ -142,6 +145,10 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
         option.create(true);
         //let mutation_log = option.open(format!("{}/mutation_log_{}", config.workdir_path, config.thread_id)).unwrap(); 
 
+            In StructFuzzer::new(...):
+
+        let bandit_seed = master_rng.next_u64();
+        let bandit = BanditScheduler::new(&config.workdir_path, config.thread_id, bandit_seed);
 
         return Self {
             fuzzer,
@@ -155,6 +162,7 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
             stats,
             //mutation_log,
             snapshot_cutoffs: HashMap::new(),
+            bandit,
         };
     }
 
@@ -211,6 +219,7 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
                         if let Some(new_id) = self.queue.add(input, &self.mutator.spec) {
                             self.snapshot_cutoffs.insert(new_id, node_len.saturating_sub(1));
                             has_new_finds = true;
+                            self.bandit.add_arm();
                         }
                     }
                 }
@@ -820,6 +829,11 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
             }
         }
 
+        let initial_corpus_size = self.queue.len();
+        for _ in 0..initial_corpus_size {
+        self.bandit.add_arm();
+        }
+
         let mut i = 0;
         loop {
             
@@ -831,6 +845,51 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
             }
             i += 1;
             self.iter();
+        }
+    }
+
+    pub fn iter(&mut self) {
+        if self.queue.len() == 0 {
+            self.perform_gen();
+        } else {
+            // Bandit: snapshot stats BEFORE
+            let crashes_before = self.queue.num_crashes();
+            let corpus_before = self.queue.len();
+
+            // Bandit choose index and fetch entry
+            let chosen_idx = self.bandit.choose();
+            let entry = self.queue.get_input_by_index(chosen_idx).read().unwrap().clone();
+
+            // Execute as before
+            match entry.state {
+            InputState::Minimize => self.perform_min(&entry),
+            InputState::Havoc => {
+                match self.config.snapshot_placement {
+                SnapshotPlacement::None => { self.havoc_no_snap(&entry); }
+                SnapshotPlacement::Balanced => { self.havoc_snap_balanced(&entry); }
+                SnapshotPlacement::Aggressive => { self.havoc_snap_aggressive(&entry); }
+                }
+            }
+            }
+
+            // Bandit: snapshot stats AFTER
+            let crashes_after = self.queue.num_crashes();
+            let corpus_after = self.queue.len();
+
+            // Reward shaping: simple & robust
+            let reward = if (corpus_after > corpus_before) || (crashes_after > crashes_before) {
+            1.0
+            } else {
+            0.0
+            };
+
+            let stats = BanditUpdateStats {
+            corpus_before,
+            corpus_after,
+            crashes_before,
+            crashes_after,
+            };
+            self.bandit.update(reward, &stats);
         }
     }
 

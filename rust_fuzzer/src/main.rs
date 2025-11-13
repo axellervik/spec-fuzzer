@@ -102,6 +102,13 @@ fn main() {
                 .long("exit_after_first_crash")
                 .help("terminate fuzzing after the first crash was found")
         )
+        .arg(
+        Arg::with_name("bandit")
+            .long("bandit")
+            .value_name("ALGO")
+            .takes_value(true)
+            .help("Seed scheduling bandit algorithm: roundrobin, exp3, exp3ix")
+        )
         .get_matches();
 
     let sharedir = matches
@@ -118,6 +125,13 @@ fn main() {
     else{
         0
     };
+
+    if let Some(algo) = matches.value_of("bandit") {
+        std::env::set_var("NYX_BANDIT_ALGO", algo);
+    }
+    if let Ok(gamma_str) = std::env::var("NYX_BANDIT_GAMMA") {
+        // already read by BanditScheduler::new
+    }
 
     if let Some(path) = matches.value_of("workdir") {
         nyx_config.set_workdir_path(path.to_string());

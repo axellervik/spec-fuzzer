@@ -330,4 +330,11 @@ impl Queue {
         }
         *value
     }
+
+    pub fn get_input_by_index(&self, index: usize) -> Arc<RwLock<Input>> {
+        let data = self.data.read().unwrap();
+        if data.inputs.is_empty() { panic!("Queue is empty"); }
+        let clamped = if index >= data.inputs.len() { data.inputs.len() - 1 } else { index };
+        data.inputs[clamped].clone()
+    }
 }
