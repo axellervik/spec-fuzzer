@@ -30,6 +30,7 @@ mod input;
 mod queue;
 mod romu;
 mod runner;
+mod bandit;
 
 use rand::thread_rng;
 use crate::rand::Rng;

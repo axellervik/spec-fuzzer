@@ -135,7 +135,7 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
         let mutator = Mutator::new(spec);
 
         let bitmaps = BitmapHandler::new(fuzzer.bitmap_buffer_size());
-        let master_rng = RomuPrng::new_from_u64(seed);
+        let mut master_rng = RomuPrng::new_from_u64(seed);
         let stats = FuzzStats::new();
 
         
@@ -145,11 +145,8 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
         option.create(true);
         //let mutation_log = option.open(format!("{}/mutation_log_{}", config.workdir_path, config.thread_id)).unwrap(); 
 
-            In StructFuzzer::new(...):
-
         let bandit_seed = master_rng.next_u64();
-        let bandit = BanditScheduler::new(&config.workdir_path, config.thread_id, bandit_seed);
-
+        let bandit = BanditScheduler::new(&config.workdir_path(), fuzzer_config.thread_id, bandit_seed);
         return Self {
             fuzzer,
             queue,
@@ -512,29 +509,29 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
         }
     }
 
-    pub fn iter(&mut self) {
-        if self.queue.len() == 0 {
-            self.perform_gen();
-        } else {
-            let entry = self.queue.schedule(&mut self.rng).read().unwrap().clone();
-            match entry.state {
-                InputState::Minimize => self.perform_min(&entry),
-                InputState::Havoc => {
-                    match self.fuzzer_config.snapshot_strategy {
-                        SnapshotPlacement::None => {
-                            self.havoc_no_snap(&entry)
-                        }
-                        SnapshotPlacement::Balanced => {
-                            self.havoc_snap_balanced(&entry);
-                        }
-                        SnapshotPlacement::Aggressive => {
-                            self.havoc_snap_aggressive(&entry);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // pub fn iter(&mut self) {
+    //     if self.queue.len() == 0 {
+    //         self.perform_gen();
+    //     } else {
+    //         let entry = self.queue.schedule(&mut self.rng).read().unwrap().clone();
+    //         match entry.state {
+    //             InputState::Minimize => self.perform_min(&entry),
+    //             InputState::Havoc => {
+    //                 match self.fuzzer_config.snapshot_strategy {
+    //                     SnapshotPlacement::None => {
+    //                         self.havoc_no_snap(&entry)
+    //                     }
+    //                     SnapshotPlacement::Balanced => {
+    //                         self.havoc_snap_balanced(&entry);
+    //                     }
+    //                     SnapshotPlacement::Aggressive => {
+    //                         self.havoc_snap_aggressive(&entry);
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
     #[inline]
     fn havoc_no_snap(&mut self, entry: &Input) {
@@ -860,17 +857,33 @@ impl<Fuzz: FuzzRunner + GetStructStorage> StructFuzzer<Fuzz> {
             let chosen_idx = self.bandit.choose();
             let entry = self.queue.get_input_by_index(chosen_idx).read().unwrap().clone();
 
-            // Execute as before
             match entry.state {
-            InputState::Minimize => self.perform_min(&entry),
-            InputState::Havoc => {
-                match self.config.snapshot_placement {
-                SnapshotPlacement::None => { self.havoc_no_snap(&entry); }
-                SnapshotPlacement::Balanced => { self.havoc_snap_balanced(&entry); }
-                SnapshotPlacement::Aggressive => { self.havoc_snap_aggressive(&entry); }
+                InputState::Minimize => self.perform_min(&entry),
+                InputState::Havoc => {
+                    match self.fuzzer_config.snapshot_strategy {
+                        SnapshotPlacement::None => {
+                            self.havoc_no_snap(&entry)
+                        }
+                        SnapshotPlacement::Balanced => {
+                            self.havoc_snap_balanced(&entry);
+                        }
+                        SnapshotPlacement::Aggressive => {
+                            self.havoc_snap_aggressive(&entry);
+                        }
+                    }
                 }
             }
-            }
+
+            // match entry.state {
+            // InputState::Minimize => self.perform_min(&entry),
+            // InputState::Havoc => {
+            //     match self.config.snapshot_placement {
+            //     SnapshotPlacement::None => { self.havoc_no_snap(&entry); }
+            //     SnapshotPlacement::Balanced => { self.havoc_snap_balanced(&entry); }
+            //     SnapshotPlacement::Aggressive => { self.havoc_snap_aggressive(&entry); }
+            //     }
+            // }
+            // }
 
             // Bandit: snapshot stats AFTER
             let crashes_after = self.queue.num_crashes();

@@ -47,7 +47,7 @@ impl BanditScheduler {
         .unwrap_or(0.1);
 
     let log_path = std::env::var("NYX_BANDIT_LOG")
-      .unwrap_or_else(|| format!("{}/bandit_log{}.csv", workdir_path, thread_id));
+      .unwrap_or_else(|_| format!("{}/bandit_log{}.csv", workdir_path, thread_id));
 
     let mut log_file = OpenOptions::new().write(true).create(true).truncate(true)
       .open(&log_path).expect("Failed to create bandit log file");
@@ -117,6 +117,47 @@ impl BanditScheduler {
   }
 
   pub fn update(&mut self, reward: f64, stats: &BanditUpdateStats) {
+
+    let i = self.last_choice;
+    if self.algorithm == BanditAlgorithm::RoundRobin || self.k() == 0 || i >= self.k() { return; }
+    let p_i = self.last_probs.get(i).copied().unwrap_or(1e-12);
+    let w_before = self.weights.clone();
+    let denom = match self.algorithm {
+      BanditAlgorithm::Exp3 => p_i.max(1e-12),
+      BanditAlgorithm::Exp3IX => (p_i + self.gamma).max(1e-12),
+      BanditAlgorithm::RoundRobin => 1.0,
+    };
+    let xhat = reward / denom;
+    let eta = self.eta();
+    self.weights[i] *= (eta * xhat).exp();
+    let mut sum_w: f64 = self.weights.iter().sum();
+    if !sum_w.is_finite() || sum_w <= 0.0 {
+      self.weights.iter_mut().for_each(|w| *w = 1.0);
+      sum_w = self.k() as f64;
+    }
+    for w in self.weights.iter_mut() { *w /= sum_w; }
+    let w_after = self.weights.clone();
+    let w_before_s = w_before.iter().map(|w| format!("{:.6}", w)).collect::<Vec<_>>().join(";");
+    let w_after_s = w_after.iter().map(|w| format!("{:.6}", w)).collect::<Vec<_>>().join(";");
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    writeln!(
+      self.log_file,
+      "{},{},{},{},{:.6},{:.3},{},{},{:.6},{},{},{},{}",
+      now_ms,
+      match self.algorithm { BanditAlgorithm::RoundRobin=>"roundrobin", BanditAlgorithm::Exp3=>"exp3", BanditAlgorithm::Exp3IX=>"exp3ix" },
+      self.k(),
+      i,
+      p_i,
+      reward,
+      w_before_s,
+      w_after_s,
+      1.0, // sum_w_after after normalization
+      stats.corpus_before,
+      stats.corpus_after,
+      stats.crashes_before,
+      stats.crashes_after
+    ).unwrap();
+    let _ = self.log_file.flush();
     if self.algorithm == BanditAlgorithm::RoundRobin || self.k() == 0 { return; }
     let i = self.last_choice;
     if i >= self.k() { return; }
@@ -148,7 +189,7 @@ impl BanditScheduler {
 
     writeln!(
       self.log_file,
-      "{},{},{},{},{:.6},{:.3},{:.6},{:.6},{:.6},{},{},{},{},{}",
+      "{},{},{},{},{:.6},{:.3},{:.6},{:.6},{:.6},{},{},{},{}",
       now_ms,
       match self.algorithm { BanditAlgorithm::RoundRobin=>"roundrobin", BanditAlgorithm::Exp3=>"exp3", BanditAlgorithm::Exp3IX=>"exp3ix" },
       self.k(),
